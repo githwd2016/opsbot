@@ -78,3 +78,9 @@ npm install && npm run build
 ```
 
 升级 axcor 依赖：推进 `axcor.lock` 的 `axcor_sha`，并保持 `pyproject.toml` 的 git 源 rev 与之一致，重新 `uv lock`。
+
+## 发布
+
+- 版本号（`pyproject.toml` 的 `[project].version`）变更合入 `main` 后，CI 自动推送 `v<版本号>` 标签并创建 GitHub Release，无需手动操作。
+- 手动推送 `v*` 标签不再触发发布。若需从非 main 提交发布（如维护分支的 backport/hotfix），请本地 `uv build` 后手动创建 Release，并附加 `dist/*.whl` 与 `dist/*.tar.gz`。
+- 发布失败恢复：标签在 CI 通过前即推送，若该次 ci/publish 失败，此版本不会由后续普通推送自动补发。请在 Actions 中对最初失败的 release 运行执行 Rerun（标签指向一致、发布附件齐全时幂等放行），或删除对应 tag/Release 后重跑。

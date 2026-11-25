@@ -70,6 +70,10 @@ jobs:
           fi
 
           # 内置 GITHUB_TOKEN 推送标签后，由当前工作流继续发布。
+          # 注意：标签在 CI 通过前已推送，且 version job 只比较本次推送的 before..after diff，
+          # 若后续 ci/publish 失败，该版本不会由后续普通推送自动补发。
+          # 恢复：在 Actions 中对最初失败的 release 运行执行 Rerun（标签指向一致、发布附件齐全时幂等放行），
+          # 或删除对应 tag/Release 后重跑。仅向前修复不会补发该版本。
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   ci:
@@ -99,9 +103,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          if gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG" >/dev/null 2>&1; then
-            if [[ "$(gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG")" == false ]]; then
-              assets=$(gh release view --json assets --jq '.assets[].name' -- "$RELEASE_TAG")
+          # 一次调用取回 isDraft 与 assets（release 不存在时命令失败，按未发布处理）
+          if release_json=$(gh release view --json isDraft,assets -- "$RELEASE_TAG" 2>/dev/null); then
+            is_draft=$(jq -r '.isDraft' <<<"$release_json")
+            if [[ "$is_draft" == false ]]; then
+              assets=$(jq -r '.assets[].name' <<<"$release_json")
               if ! grep -q '\.whl$' <<<"$assets" || ! grep -q '\.tar\.gz$' <<<"$assets"; then
                 echo "::error::Release $RELEASE_TAG 已存在但缺少发行包附件，请删除后重跑"
                 exit 1
