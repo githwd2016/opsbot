@@ -22,7 +22,13 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            exit 0
+          fi
+          if ! git fetch --no-tags --depth=1 origin "$BEFORE_SHA"; then
+            echo "::warning::推送前提交 $BEFORE_SHA 不可达，跳过本次发布检测"
+            exit 0
+          fi
           changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" -- pyproject.toml)
           if [[ -n "$changed" ]]; then
             git show "$BEFORE_SHA:pyproject.toml" > "$RUNNER_TEMP/previous-pyproject.toml"
@@ -93,7 +99,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
-          if [[ "$(gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG")" == false ]]; then
-            exit 0
+          if gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [[ "$(gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG")" == false ]]; then
+              assets=$(gh release view --json assets --jq '.assets[].name' -- "$RELEASE_TAG")
+              if ! grep -q '\.whl$' <<<"$assets" || ! grep -q '\.tar\.gz$' <<<"$assets"; then
+                echo "::error::Release $RELEASE_TAG 已存在但缺少发行包附件，请删除后重跑"
+                exit 1
+              fi
+              exit 0
+            fi
           fi
           gh release create --verify-tag --generate-notes -- "$RELEASE_TAG" dist/*.whl dist/*.tar.gz
