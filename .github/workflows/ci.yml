@@ -1,10 +1,14 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: true
 
 jobs:
   backend:
@@ -39,11 +43,13 @@ jobs:
           python-version: "3.12"
 
       - name: 校验发布标签与包版本
-        if: github.ref_type == 'tag'
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           expected_tag="v$(uv version --short)"
-          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            echo "::error::发布标签 $GITHUB_REF_NAME 与包版本对应的 $expected_tag 不一致"
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error::发布标签 $RELEASE_TAG 与包版本对应的 $expected_tag 不一致"
             exit 1
           fi
 
@@ -74,7 +80,7 @@ jobs:
           "$UV_TOOL_BIN_DIR/workflow-controller" --help
 
       - name: 上传发行包
-        if: github.ref_type == 'tag'
+        if: inputs.release_tag != ''
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: python-distributions

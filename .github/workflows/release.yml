@@ -2,24 +2,85 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: read
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
-
-  publish:
-    needs: ci
+  version:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: 检查项目配置是否变化
+        id: project
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
+          changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" -- pyproject.toml)
+          if [[ -n "$changed" ]]; then
+            git show "$BEFORE_SHA:pyproject.toml" > "$RUNNER_TEMP/previous-pyproject.toml"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        if: steps.project.outputs.changed == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: 检测版本变化并推送标签
+        id: version
+        if: steps.project.outputs.changed == 'true'
+        run: |
+          version_changed=$(uv run --no-project python - "$RUNNER_TEMP/previous-pyproject.toml" <<'PY'
+          import sys
+          import tomllib
+
+          with open(sys.argv[1], "rb") as previous, open("pyproject.toml", "rb") as current:
+              print(tomllib.load(previous)["project"]["version"] != tomllib.load(current)["project"]["version"])
+          PY
+          )
+          if [[ "$version_changed" == False ]]; then
+            exit 0
+          fi
+
+          tag="v$(uv version --short)"
+          tag_ref="refs/tags/$tag"
+          existing_tag=$(git ls-remote --refs origin "$tag_ref")
+          if [[ -n "$existing_tag" ]]; then
+            git fetch --no-tags --depth=1 origin "$tag_ref"
+            if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$GITHUB_SHA" ]]; then
+              echo "::error::发布标签 $tag 已指向其他提交"
+              exit 1
+            fi
+          else
+            git push origin "$GITHUB_SHA:$tag_ref"
+          fi
+
+          # 内置 GITHUB_TOKEN 推送标签后，由当前工作流继续发布。
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: version
+    if: needs.version.outputs.tag != ''
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_tag: ${{ needs.version.outputs.tag }}
+
+  publish:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ needs.version.outputs.tag }}
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -30,4 +91,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create --verify-tag --generate-notes -- "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if [[ "$(gh release view --json isDraft --jq '.isDraft' -- "$RELEASE_TAG")" == false ]]; then
+            exit 0
+          fi
+          gh release create --verify-tag --generate-notes -- "$RELEASE_TAG" dist/*.whl dist/*.tar.gz
