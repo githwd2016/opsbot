@@ -1,9 +1,6 @@
 name: ci
 
 on:
-  # 合并队列启用前保留 main 推送触发，保证非版本变更合入后仍有 CI 覆盖；合并队列启用后可删除此触发，改由 merge_group 承担。
-  push:
-    branches: [main]
   pull_request:
   merge_group:
     types: [checks_requested]
